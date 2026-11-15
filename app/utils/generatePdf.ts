@@ -1,6 +1,8 @@
 // app/utils/generatePdf.ts
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
+import QRCode from "qrcode";
+import { DEFAULT_SETTINGS } from "@/app/utils/settings";
 
 interface GeneratePdfParams {
   customerName: string;
@@ -10,9 +12,13 @@ interface GeneratePdfParams {
   totalLiters: number;
   totalAmount: number;
   pricePerLiter: number;
+  upiId?: string;
+  dairyName?: string;
+  tagline?: string;
+  contactPhone?: string;
 }
 
-export function generatePdf({
+export async function generatePdf({
   customerName,
   phoneNumber,
   currentDate,
@@ -20,7 +26,11 @@ export function generatePdf({
   totalLiters,
   totalAmount,
   pricePerLiter,
-}: GeneratePdfParams): void {
+  upiId,
+  dairyName = DEFAULT_SETTINGS.dairyName,
+  tagline = DEFAULT_SETTINGS.tagline,
+  contactPhone,
+}: GeneratePdfParams): Promise<void> {
   const doc = new jsPDF();
   const customer = customerName || "Customer";
   const phone = "91" + phoneNumber;
@@ -51,12 +61,12 @@ export function generatePdf({
   setColor(colors.white);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(22);
-  doc.text("Shreenathji Gir Gaushala", doc.internal.pageSize.width / 2, 17, {
+  doc.text(dairyName, doc.internal.pageSize.width / 2, 17, {
     align: "center",
   });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(12);
-  doc.text("Fresh Milk Delivery Service", doc.internal.pageSize.width / 2, 28, {
+  doc.text(tagline, doc.internal.pageSize.width / 2, 28, {
     align: "center",
   });
   setColor(colors.white);
@@ -136,11 +146,63 @@ export function generatePdf({
     align: "center",
   });
 
-  yPos = doc.internal.pageSize.height - 40;
+  // ── UPI QR Code Section (Page 1 - after Total Amount) ───────────────────
+  if (upiId && upiId.trim() && totalAmount > 0) {
+    const cleanUpi = upiId.trim();
+    const upiUrl = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${encodeURIComponent(dairyName)}&am=${totalAmount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(`Milk Bill ${monthName} ${year}`)}`;
+
+    try {
+      const qrDataUrl = await QRCode.toDataURL(upiUrl, {
+        margin: 1,
+        width: 256,
+        color: {
+          dark: "#2c3e50",
+          light: "#ffffff",
+        },
+      });
+
+      const qrCardY = totalBoxY + totalBoxHeight + 6;
+      const qrCardWidth = 90;
+      const qrCardHeight = 46;
+      const qrCardX = (doc.internal.pageSize.width - qrCardWidth) / 2;
+
+      // Card background
+      setFillColor([248, 250, 252]);
+      setDrawColor(colors.light);
+      doc.roundedRect(qrCardX, qrCardY, qrCardWidth, qrCardHeight, 3, 3, "FD");
+
+      // Card Header
+      setColor(colors.secondary);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("SCAN TO PAY VIA ANY UPI APP", doc.internal.pageSize.width / 2, qrCardY + 6, {
+        align: "center",
+      });
+
+      // QR Code
+      const qrSize = 27;
+      const qrX = (doc.internal.pageSize.width - qrSize) / 2;
+      const qrY = qrCardY + 8.5;
+      doc.addImage(qrDataUrl, "PNG", qrX, qrY, qrSize, qrSize);
+
+      // Card Footer details
+      setColor(colors.dark);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text(`UPI ID: ${cleanUpi}`, doc.internal.pageSize.width / 2, qrY + qrSize + 4, {
+        align: "center",
+      });
+
+    } catch (qrError) {
+      console.error("Failed to generate UPI QR code for PDF:", qrError);
+    }
+  }
+
+  yPos = doc.internal.pageSize.height - 24;
   setColor(colors.medium);
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.text(
-    "Thank you for choosing Shreenathji Gir Gaushala!",
+    `Thank you for choosing ${dairyName}!`,
     doc.internal.pageSize.width / 2,
     yPos,
     { align: "center" }
@@ -148,7 +210,7 @@ export function generatePdf({
   doc.text(
     "For any queries, please contact us.",
     doc.internal.pageSize.width / 2,
-    yPos + 8,
+    yPos + 5.5,
     { align: "center" }
   );
 

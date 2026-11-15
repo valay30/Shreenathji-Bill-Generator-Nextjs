@@ -1,6 +1,6 @@
 {
   "name": "cow-milk-bill-generator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.2",
+    "@types/qrcode": "^1.5.6",
     "jspdf": "^3.0.2",
     "jspdf-autotable": "^5.0.2",
     "next": "^16.4.6",
+    "qrcode": "^1.5.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

@@ -1,5 +1,7 @@
 // app/utils/formatWhatsApp.ts
 
+import { DEFAULT_SETTINGS } from "@/app/utils/settings";
+
 interface FormatWhatsAppParams {
   customerName: string;
   currentDate: Date;
@@ -7,6 +9,8 @@ interface FormatWhatsAppParams {
   totalLiters: number;
   totalAmount: number;
   pricePerLiter: number;
+  upiId?: string;
+  dairyName?: string;
 }
 
 export function formatWhatsAppMessage({
@@ -16,6 +20,8 @@ export function formatWhatsAppMessage({
   totalLiters,
   totalAmount,
   pricePerLiter,
+  upiId,
+  dairyName = DEFAULT_SETTINGS.dairyName,
 }: FormatWhatsAppParams): string {
   const name = customerName || "Valued Customer";
   const monthName = currentDate.toLocaleString("default", { month: "long" });
@@ -24,7 +30,8 @@ export function formatWhatsAppMessage({
   const pricePerLiterFormatted = pricePerLiter.toFixed(2);
   const totalAmountFormatted = totalAmount.toFixed(2);
 
-  let billText = `🐄 *Milk Bill - ${monthName} ${year}* 🐄\n\n`;
+  let billText = `*${dairyName}*\n`;
+  billText += `*Milk Bill - ${monthName} ${year}*\n\n`;
   billText += `Hi *${name}*,\n\n`;
   billText += `*Summary*\n`;
   billText += `Total Milk: *${totalLitersFormatted} L*\n`;
@@ -79,7 +86,15 @@ export function formatWhatsAppMessage({
     billText += `\n\n`;
   }
 
-  billText += `Thank you! 🙏`;
+  // ── UPI Payment Link ──────────────────────────────────────────────────────
+  if (upiId && upiId.trim() && totalAmount > 0) {
+    const cleanUpi = upiId.trim();
+    const upiUrl = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${encodeURIComponent(dairyName)}&am=${totalAmountFormatted}&cu=INR&tn=${encodeURIComponent(`Milk Bill ${monthName} ${year}`)}`;
+    billText += `*Pay Instantly via UPI:*\n`;
+    billText += `UPI ID: *${cleanUpi}*\n\n`;
+  }
+
+  billText += `Thank you for choosing *${dairyName}*! 🙏`;
   return billText;
 }
 

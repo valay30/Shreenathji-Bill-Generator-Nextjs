@@ -2,12 +2,13 @@
 "use client";
 
 import { useState, useEffect, useMemo, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { supabaseClient } from "@/app/lib/supabase";
 import { generatePdf } from "@/app/utils/generatePdf";
 import { formatWhatsAppMessage, sanitizePhone } from "@/app/utils/formatWhatsApp";
+import { getStoredSettings } from "@/app/utils/settings";
 import CalendarGrid from "@/app/components/CalendarGrid";
 import QuantityModal from "@/app/components/QuantityModal";
-import CustomerModal from "@/app/components/CustomerModal";
 import {
   UserIcon,
   WhatsAppIcon,
@@ -18,7 +19,7 @@ import {
 import { Customer } from "@/app/types";
 import packageInfo from "@/package.json";
 
-const emptySubscribe = () => () => {};
+const emptySubscribe = () => () => { };
 
 export default function Home() {
   const isMounted = useSyncExternalStore(
@@ -30,18 +31,47 @@ export default function Home() {
   const [selectedDays, setSelectedDays] = useState(new Map<string, number>());
   const [customerName, setCustomerName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [pricePerLiter, setPricePerLiter] = useState(50);
+  const [pricePerLiter, setPricePerLiter] = useState(() => {
+    return getStoredSettings().defaultPricePerLiter;
+  });
+  const [upiId, setUpiId] = useState(() => {
+    return getStoredSettings().upiId;
+  });
   const [wholeMonth, setWholeMonth] = useState(false);
   const [literModal, setLiterModal] = useState(false);
   const [alertModal, setAlertModal] = useState(false);
-  const [profileModal, setProfileModal] = useState(false);
   const [modalDate, setModalDate] = useState("");
   const [modalLiters, setModalLiters] = useState(1);
   const [alertMessage, setAlertMessage] = useState("");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchResults, setSearchResults] = useState<Customer[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  // ── Preload customers in memory on load for 0ms instant search ───────────
+  useEffect(() => {
+    async function preloadCustomers() {
+      try {
+        const { data, error } = await supabaseClient
+          .from("customers")
+          .select("*")
+          .order("name", { ascending: true });
+        if (!error && data) {
+          setAllCustomers(data);
+        }
+      } catch (err) {
+        console.error("Error preloading customers:", err);
+      }
+    }
+    preloadCustomers();
+  }, []);
+
+
+  // ── Instant in-memory search (derived via useMemo - 0ms delay) ────────────
+  const customerSuggestions = useMemo(() => {
+    const raw = phoneNumber.trim().replace(/[\s\-\(\)]/g, "").replace(/^(\+91|91|0)/, "");
+    if (raw.length < 2) return [];
+    return allCustomers.filter((c) => c.mobile_number.includes(raw)).slice(0, 5);
+  }, [phoneNumber, allCustomers]);
 
   // ── Whole-month selector ────────────────────────────────────────────────
   const handleWholeMonthToggle = (checked: boolean) => {
@@ -60,39 +90,6 @@ export default function Home() {
       setSelectedDays(new Map());
     }
   };
-
-  const handleSearchChange = (value: string) => {
-    setSearchTerm(value);
-    if (!value.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-    }
-  };
-
-  // ── Debounced customer search ───────────────────────────────────────────
-  useEffect(() => {
-    const trimmed = searchTerm.trim();
-    if (!trimmed) {
-      return;
-    }
-    const timer = setTimeout(async () => {
-      setIsSearching(true);
-      try {
-        const { data, error } = await supabaseClient
-          .from("customers")
-          .select("*")
-          .or(`name.ilike.%${trimmed}%,mobile_number.ilike.%${trimmed}%`)
-          .limit(10);
-        if (error) throw error;
-        setSearchResults(data || []);
-      } catch (err) {
-        console.error("Error searching customers:", err);
-      } finally {
-        setIsSearching(false);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
 
   // ── Derived totals ──────────────────────────────────────────────────────
   const totalLiters = useMemo(
@@ -171,9 +168,19 @@ export default function Home() {
         throw new Error(json.error || "Server error while saving bill.");
       }
       showAlert("✅ Bill details saved to database successfully!");
+      // Update local memory cache with saved customer
+      setAllCustomers((prev) => {
+        const trimmedName = customerName.trim();
+        const exists = prev.some((c) => c.mobile_number === mobile);
+        if (exists) {
+          return prev.map((c) => (c.mobile_number === mobile ? { ...c, name: trimmedName } : c));
+        }
+        return [...prev, { id: Date.now().toString(), name: trimmedName, mobile_number: mobile }];
+      });
       setCustomerName("");
       setPhoneNumber("");
-      setPricePerLiter(50);
+      setShowSuggestions(false);
+      setPricePerLiter(getStoredSettings().defaultPricePerLiter);
       setWholeMonth(false);
       setSelectedDays(new Map());
     } catch (error: unknown) {
@@ -185,12 +192,11 @@ export default function Home() {
     }
   };
 
-  // ── Customer modal ────────────────────────────────────────────────────────
+  // ── Customer selection from suggestions ──────────────────────────────────
   const handleSelectCustomer = (customer: Customer) => {
     setCustomerName(customer.name);
     setPhoneNumber(customer.mobile_number);
-    setProfileModal(false);
-    setSearchTerm("");
+    setShowSuggestions(false);
   };
 
   // ── WhatsApp ──────────────────────────────────────────────────────────────
@@ -204,6 +210,7 @@ export default function Home() {
       showAlert("Please select at least one day to generate a bill.");
       return;
     }
+    const settings = getStoredSettings();
     const billText = formatWhatsAppMessage({
       customerName,
       currentDate,
@@ -211,17 +218,23 @@ export default function Home() {
       totalLiters,
       totalAmount,
       pricePerLiter,
+      upiId,
+      dairyName: settings.dairyName,
     });
-    window.open(`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(billText)}`, "_blank");
+    window.open(
+      `https://api.whatsapp.com/send/?phone=91${cleanPhone}&text=${encodeURIComponent(billText)}`,
+      "_blank"
+    );
   };
 
   // ── PDF ───────────────────────────────────────────────────────────────────
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     if (selectedDays.size === 0) {
       showAlert("Please select at least one day to generate a PDF.");
       return;
     }
-    generatePdf({
+    const settings = getStoredSettings();
+    await generatePdf({
       customerName,
       phoneNumber,
       currentDate,
@@ -229,6 +242,10 @@ export default function Home() {
       totalLiters,
       totalAmount,
       pricePerLiter,
+      upiId,
+      dairyName: settings.dairyName,
+      tagline: settings.tagline,
+      contactPhone: settings.contactPhone,
     });
   };
 
@@ -243,24 +260,29 @@ export default function Home() {
 
   return (
     <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl font-inter">
-      <header className="text-center mb-8">
-        <div className="flex justify-between items-center mb-4">
-          <div />
-          <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-blue-600">Bill Generator</h1>
-            <p className="text-gray-600 mt-2">Create and send monthly milk bills.</p>
+      <header className="mb-8">
+        <div className="flex justify-between items-center">
+          <div className="w-10"></div>
+          <div className="text-center">
+            <h1 className="text-3xl sm:text-4xl font-bold text-blue-600">
+              Bill Generator
+            </h1>
+            <p className="text-gray-600 mt-2">
+              Create and send monthly milk bills.
+            </p>
           </div>
-          <div>
-            <button
-              onClick={() => setProfileModal(true)}
-              className="p-3 bg-blue-100 hover:bg-blue-200 rounded-full transition-colors"
-              aria-label="Open customer management"
+          <div className="w-10 flex justify-end">
+            <Link
+              href="/settings"
+              className="p-2.5 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-full transition-all hover:scale-105 shadow-sm"
+              title="Settings"
+              aria-label="Open settings"
             >
               <UserIcon />
-            </button>
+            </Link>
           </div>
-        </div>
-      </header>
+        </div >
+      </header >
 
       <main className="bg-white p-6 sm:p-8 rounded-2xl shadow-lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -281,7 +303,7 @@ export default function Home() {
                   placeholder="e.g., Valay Patel"
                 />
               </div>
-              <div>
+              <div className="relative">
                 <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
                   Phone Number
                 </label>
@@ -297,6 +319,19 @@ export default function Home() {
                       const raw = e.target.value.replace(/[\s\-\(\)]/g, "");
                       const cleaned = raw.replace(/^(\+91|91|0)/, "").slice(0, 10);
                       setPhoneNumber(cleaned);
+                      if (cleaned.length < 2) {
+                        setShowSuggestions(false);
+                      } else {
+                        setShowSuggestions(true);
+                        // Auto-fill customer name if exact 10-digit match exists and name is currently empty
+                        if (cleaned.length === 10 && !customerName.trim()) {
+                          const exact = allCustomers.find((c) => c.mobile_number === cleaned);
+                          if (exact) setCustomerName(exact.name);
+                        }
+                      }
+                    }}
+                    onFocus={() => {
+                      if (customerSuggestions.length > 0) setShowSuggestions(true);
                     }}
                     maxLength={15}
                     minLength={10}
@@ -304,8 +339,47 @@ export default function Home() {
                     title="Enter a 10-digit phone number"
                     className="flex-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-r-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                     placeholder="9999999999"
+                    autoComplete="off"
                   />
                 </div>
+
+                {/* Saved Customers Suggestions Dropdown */}
+                {showSuggestions && customerSuggestions.length > 0 && (
+                  <div className="absolute z-20 left-0 right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-xl max-h-56 overflow-y-auto">
+                    {/* Header with Title on Left and Close at the far end */}
+                    <div className="px-3.5 py-2 bg-gray-50/90 border-b border-gray-100 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setShowSuggestions(false)}
+                        className="text-gray-400 hover:text-gray-700 text-xs font-medium hover:bg-gray-200/60 rounded px-1.5 py-0.5 transition-colors ml-auto"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Customer list: Single line with name and phone */}
+                    {customerSuggestions.map((cust) => (
+                      <div
+                        key={cust.id}
+                        onClick={() => handleSelectCustomer(cust)}
+                        className="group flex items-center justify-between px-3.5 py-2.5 hover:bg-blue-50/80 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors"
+                      >
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <span className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 font-semibold text-xs flex items-center justify-center shrink-0">
+                            {cust.name.charAt(0).toUpperCase()}
+                          </span>
+                          <span className="font-semibold text-gray-900 text-sm truncate">
+                            {cust.name}
+                          </span>
+                          <span className="text-gray-300">•</span>
+                          <span className="text-gray-500 text-xs font-mono shrink-0">
+                            +91 {cust.mobile_number}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -325,9 +399,11 @@ export default function Home() {
             <h2 className="text-2xl font-semibold mb-4 border-b pb-2">Bill Summary</h2>
             <div className="space-y-4">
               <div>
-                <label htmlFor="pricePerLiter" className="block text-sm font-medium text-gray-700">
-                  Price per Liter (₹)
-                </label>
+                <div className="flex justify-between items-center">
+                  <label htmlFor="pricePerLiter" className="block text-sm font-medium text-gray-700">
+                    Price per Liter (₹)
+                  </label>
+                </div>
                 <input
                   type="number"
                   id="pricePerLiter"
@@ -383,48 +459,34 @@ export default function Home() {
       </footer>
 
       {/* Quantity Modal */}
-      {literModal && (
-        <QuantityModal
-          modalDate={modalDate}
-          modalLiters={modalLiters}
-          onLitersChange={setModalLiters}
-          onSave={handleSaveLiter}
-          onCancel={() => setLiterModal(false)}
-        />
-      )}
+      {
+        literModal && (
+          <QuantityModal
+            modalDate={modalDate}
+            modalLiters={modalLiters}
+            onLitersChange={setModalLiters}
+            onSave={handleSaveLiter}
+            onCancel={() => setLiterModal(false)}
+          />
+        )
+      }
 
       {/* Alert Modal */}
-      {alertModal && (
-        <div className="modal-backdrop">
-          <div className="modal bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm text-center">
-            <p className="text-lg text-gray-800 mb-6">{alertMessage}</p>
-            <button
-              onClick={() => setAlertModal(false)}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 w-full"
-            >
-              OK
-            </button>
+      {
+        alertModal && (
+          <div className="modal-backdrop">
+            <div className="modal bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm text-center">
+              <p className="text-lg text-gray-800 mb-6">{alertMessage}</p>
+              <button
+                onClick={() => setAlertModal(false)}
+                className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 w-full"
+              >
+                OK
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Customer Modal */}
-      {profileModal && (
-        <CustomerModal
-          searchTerm={searchTerm}
-          searchResults={searchResults}
-          isSearching={isSearching}
-          onSearchChange={handleSearchChange}
-          onSelectCustomer={handleSelectCustomer}
-          onNewCustomer={() => {
-            setCustomerName("");
-            setPhoneNumber("");
-            setProfileModal(false);
-            setSearchTerm("");
-          }}
-          onClose={() => { setProfileModal(false); setSearchTerm(""); }}
-        />
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 }
