@@ -1,7 +1,7 @@
 // app/page.tsx
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useSyncExternalStore } from "react";
 import { supabaseClient } from "@/app/lib/supabase";
 import { generatePdf } from "@/app/utils/generatePdf";
 import { formatWhatsAppMessage, sanitizePhone } from "@/app/utils/formatWhatsApp";
@@ -18,7 +18,14 @@ import {
 import { Customer } from "@/app/types";
 import packageInfo from "@/package.json";
 
+const emptySubscribe = () => () => {};
+
 export default function Home() {
+  const isMounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDays, setSelectedDays] = useState(new Map<string, number>());
   const [customerName, setCustomerName] = useState("");
@@ -37,8 +44,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
 
   // ── Whole-month selector ────────────────────────────────────────────────
-  useEffect(() => {
-    if (wholeMonth) {
+  const handleWholeMonthToggle = (checked: boolean) => {
+    setWholeMonth(checked);
+    if (checked) {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
       const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -49,21 +57,26 @@ export default function Home() {
       }
       setSelectedDays(newSelectedDays);
     } else {
-      if (selectedDays.size > 0) setSelectedDays(new Map());
+      setSelectedDays(new Map());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wholeMonth, currentDate]);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value);
+    if (!value.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+    }
+  };
 
   // ── Debounced customer search ───────────────────────────────────────────
   useEffect(() => {
     const trimmed = searchTerm.trim();
-    if (trimmed.length < 1) {
-      setSearchResults([]);
-      setIsSearching(false);
+    if (!trimmed) {
       return;
     }
-    setIsSearching(true);
     const timer = setTimeout(async () => {
+      setIsSearching(true);
       try {
         const { data, error } = await supabaseClient
           .from("customers")
@@ -132,52 +145,31 @@ export default function Home() {
     setWholeMonth(false);
   };
 
-  // ── Supabase ─────────────────────────────────────────────────────────────
-  const saveCustomerToDatabase = async () => {
-    const name = customerName.trim();
-    const mobile = sanitizePhone(phoneNumber);
-    if (!name || !mobile || mobile.length !== 10) {
-      throw new Error("Please enter valid customer name and 10-digit mobile number.");
-    }
-    const { data, error } = await supabaseClient
-      .from("customers")
-      .upsert([{ name, mobile_number: mobile }], { onConflict: "mobile_number" });
-    if (error) throw error;
-    return data;
-  };
-
-  const saveBillToDatabase = async () => {
-    const name = customerName.trim();
-    const mobile = sanitizePhone(phoneNumber);
-    if (!name || !mobile || selectedDays.size === 0) {
-      throw new Error("Please fill customer details and select at least one day.");
-    }
-    const { data, error } = await supabaseClient.from("bill_details").insert([
-      {
-        customer_name: name,
-        mobile_number: mobile,
-        billing_period: currentDate.toLocaleString("default", { month: "long", year: "numeric" }),
-        milk_quantity: totalLiters,
-        price_per_liter: pricePerLiter,
-        total_amount: totalAmount,
-      },
-    ]);
-    if (error) {
-      console.error("Supabase error details:", error);
-      throw error;
-    }
-    return data;
-  };
-
+  // ── Save bill via server API route (keeps service key off the browser) ──
   const handleAddData = async () => {
-    if (!customerName || !phoneNumber || selectedDays.size === 0) {
+    const mobile = sanitizePhone(phoneNumber);
+    if (!customerName.trim() || !mobile || mobile.length !== 10 || selectedDays.size === 0) {
       showAlert("Please fill customer details and select at least one day.");
       return;
     }
     setIsLoading(true);
     try {
-      await saveCustomerToDatabase();
-      await saveBillToDatabase();
+      const res = await fetch("/api/save-bill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName: customerName.trim(),
+          mobileNumber: mobile,
+          billingPeriod: currentDate.toLocaleString("default", { month: "long", year: "numeric" }),
+          milkQuantity: totalLiters,
+          pricePerLiter,
+          totalAmount,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Server error while saving bill.");
+      }
       showAlert("✅ Bill details saved to database successfully!");
       setCustomerName("");
       setPhoneNumber("");
@@ -241,6 +233,14 @@ export default function Home() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
+  if (!isMounted) {
+    return (
+      <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl font-inter flex items-center justify-center min-h-[50vh]">
+        <div className="text-gray-400 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl font-inter">
       <header className="text-center mb-8">
@@ -248,7 +248,7 @@ export default function Home() {
           <div />
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-blue-600">Bill Generator</h1>
-            <p className="text-gray-600 mt-2">Create and send monthly milk bills with ease.</p>
+            <p className="text-gray-600 mt-2">Create and send monthly milk bills.</p>
           </div>
           <div>
             <button
@@ -316,7 +316,7 @@ export default function Home() {
               onDayClick={handleDayClick}
               onPrevMonth={handlePrevMonth}
               onNextMonth={handleNextMonth}
-              onWholeMonthChange={setWholeMonth}
+              onWholeMonthChange={handleWholeMonthToggle}
             />
           </div>
 
@@ -414,7 +414,7 @@ export default function Home() {
           searchTerm={searchTerm}
           searchResults={searchResults}
           isSearching={isSearching}
-          onSearchChange={setSearchTerm}
+          onSearchChange={handleSearchChange}
           onSelectCustomer={handleSelectCustomer}
           onNewCustomer={() => {
             setCustomerName("");
