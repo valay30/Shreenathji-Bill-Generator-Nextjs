@@ -27,6 +27,11 @@ export default function CalendarGrid({
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const startDayOfWeek = firstDayOfMonth.getDay();
 
+  // Detect today's date
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === year && today.getMonth() === month;
+  const todayDate = today.getDate();
+
   const days = [];
   for (let i = 0; i < startDayOfWeek; i++) {
     days.push(<div key={`empty-${i}`} />);
@@ -35,12 +40,21 @@ export default function CalendarGrid({
     const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     const isSelected = selectedDays.has(dateStr);
     const liters = selectedDays.get(dateStr);
+    const isToday = isCurrentMonth && day === todayDate;
 
     days.push(
       <div
         key={dateStr}
-        className={`calendar-day p-2 cursor-pointer flex items-center justify-center h-10 w-10 mx-auto relative ${isSelected ? "selected" : ""
-          }`}
+        className={`calendar-day p-2 cursor-pointer flex items-center justify-center h-10 w-10 mx-auto relative rounded-full transition-all ${
+          isSelected
+            ? isToday
+              ? "selected ring-2 ring-blue-600 ring-offset-2"
+              : "selected"
+            : isToday
+            ? "font-bold text-blue-600 ring-2 ring-blue-400 ring-offset-1 bg-blue-50/60"
+            : ""
+        }`}
+        title={isToday ? "Today" : undefined}
         onClick={() => onDayClick(dateStr)}
       >
         {day}
