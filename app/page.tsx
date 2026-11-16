@@ -6,7 +6,7 @@ import Link from "next/link";
 import { supabaseClient } from "@/app/lib/supabase";
 import { generatePdf } from "@/app/utils/generatePdf";
 import { formatWhatsAppMessage, sanitizePhone } from "@/app/utils/formatWhatsApp";
-import { getStoredSettings } from "@/app/utils/settings";
+import { getStoredSettings, fetchRemoteSettings } from "@/app/utils/settings";
 import CalendarGrid from "@/app/components/CalendarGrid";
 import QuantityModal from "@/app/components/QuantityModal";
 import {
@@ -31,7 +31,7 @@ export default function Home() {
   const [selectedDays, setSelectedDays] = useState(new Map<string, number>());
   const [customerName, setCustomerName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [pricePerLiter, setPricePerLiter] = useState(() => {
+  const [pricePerLiter, setPricePerLiter] = useState<number | string>(() => {
     return getStoredSettings().defaultPricePerLiter;
   });
   const [upiId, setUpiId] = useState(() => {
@@ -47,8 +47,17 @@ export default function Home() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // ── Preload customers in memory on load for 0ms instant search ───────────
+  // ── Sync cloud settings & preload customers on load ─────────────────────
   useEffect(() => {
+    // 1. Sync latest cloud settings from Supabase
+    fetchRemoteSettings().then((remote) => {
+      if (remote) {
+        setPricePerLiter(remote.defaultPricePerLiter);
+        setUpiId(remote.upiId);
+      }
+    });
+
+    // 2. Preload customers in memory on load for 0ms instant search
     async function preloadCustomers() {
       try {
         const { data, error } = await supabaseClient
@@ -96,9 +105,10 @@ export default function Home() {
     () => Array.from(selectedDays.values()).reduce((sum, l) => sum + l, 0),
     [selectedDays]
   );
+  const numericPrice = parseFloat(String(pricePerLiter)) || 0;
   const totalAmount = useMemo(
-    () => totalLiters * pricePerLiter,
-    [totalLiters, pricePerLiter]
+    () => totalLiters * numericPrice,
+    [totalLiters, numericPrice]
   );
 
   // ── Helpers ─────────────────────────────────────────────────────────────
@@ -159,7 +169,7 @@ export default function Home() {
           mobileNumber: mobile,
           billingPeriod: currentDate.toLocaleString("default", { month: "long", year: "numeric" }),
           milkQuantity: totalLiters,
-          pricePerLiter,
+          pricePerLiter: numericPrice,
           totalAmount,
         }),
       });
@@ -217,7 +227,7 @@ export default function Home() {
       selectedDays,
       totalLiters,
       totalAmount,
-      pricePerLiter,
+      pricePerLiter: numericPrice,
       upiId,
       dairyName: settings.dairyName,
     });
@@ -241,7 +251,7 @@ export default function Home() {
       selectedDays,
       totalLiters,
       totalAmount,
-      pricePerLiter,
+      pricePerLiter: numericPrice,
       upiId,
       dairyName: settings.dairyName,
       tagline: settings.tagline,
@@ -259,7 +269,7 @@ export default function Home() {
   }
 
   return (
-    <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl font-inter">
+    <div className="container mx-auto pt-8 px-4 pb-6 sm:p-6 lg:p-8 max-w-4xl font-inter">
       <header className="mb-8">
         <div className="flex justify-between items-center">
           <div className="w-10"></div>
@@ -268,7 +278,7 @@ export default function Home() {
               Bill Generator
             </h1>
             <p className="text-gray-600 mt-2">
-              Create and send monthly milk bills.
+              Milk Billing Made Easy!
             </p>
           </div>
           <div className="w-10 flex justify-end">
@@ -408,50 +418,55 @@ export default function Home() {
                   type="number"
                   id="pricePerLiter"
                   value={pricePerLiter}
-                  onChange={(e) => setPricePerLiter(parseFloat(e.target.value) || 0)}
-                  className="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  onChange={(e) => setPricePerLiter(e.target.value)}
+                  placeholder="0"
+                  min="0"
+                  step="0.5"
+                  className="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm font-semibold text-gray-800"
                 />
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700">Total Selected Days</p>
-                <p className="text-lg font-bold text-blue-600">{selectedDays.size}</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Total Days</p>
+                    <p className="text-lg font-bold text-blue-600">{selectedDays.size}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Total Milk Quantity</p>
+                    <p className="text-lg font-bold text-blue-600">{totalLiters.toFixed(2)} Liters</p>
+                  </div>
+                </div>
+                <div className="border-t pt-4">
+                  <p className="text-lg font-medium text-gray-700">Total Amount</p>
+                  <p className="text-3xl font-bold text-green-600">₹ {totalAmount.toFixed(2)}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700">Total Milk Quantity</p>
-                <p className="text-lg font-bold text-blue-600">{totalLiters.toFixed(2)} Liters</p>
-              </div>
-              <div className="border-t pt-4">
-                <p className="text-lg font-medium text-gray-700">Total Amount</p>
-                <p className="text-3xl font-bold text-green-600">₹ {totalAmount.toFixed(2)}</p>
-              </div>
-            </div>
 
-            <div className="mt-8 space-y-3">
-              <button
-                onClick={handleSendWhatsapp}
-                className="w-full bg-green-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all flex items-center justify-center gap-2"
-              >
-                <WhatsAppIcon />
-                Send Bill on WhatsApp
-              </button>
-              <button
-                onClick={handleDownloadPdf}
-                className="w-full bg-blue-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all flex items-center justify-center gap-2"
-              >
-                <DownloadIcon />
-                Download PDF
-              </button>
-              <button
-                onClick={handleAddData}
-                disabled={isLoading}
-                className="w-full bg-blue-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isLoading ? <SpinnerIcon /> : <DatabaseIcon />}
-                {isLoading ? "Processing..." : "Add Data"}
-              </button>
+              <div className="mt-8 space-y-3">
+                <button
+                  onClick={handleSendWhatsapp}
+                  className="w-full bg-green-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all flex items-center justify-center gap-2"
+                >
+                  <WhatsAppIcon />
+                  Send Bill on WhatsApp
+                </button>
+                <button
+                  onClick={handleDownloadPdf}
+                  className="w-full bg-blue-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all flex items-center justify-center gap-2"
+                >
+                  <DownloadIcon />
+                  Download PDF
+                </button>
+                <button
+                  onClick={handleAddData}
+                  disabled={isLoading}
+                  className="w-full bg-blue-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? <SpinnerIcon /> : <DatabaseIcon />}
+                  {isLoading ? "Processing..." : "Add Data"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
       </main>
 
       <footer className="text-center mt-6 pb-4 text-xs text-gray-400">

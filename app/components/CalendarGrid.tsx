@@ -39,9 +39,8 @@ export default function CalendarGrid({
     days.push(
       <div
         key={dateStr}
-        className={`calendar-day p-2 cursor-pointer flex items-center justify-center h-10 w-10 mx-auto relative ${
-          isSelected ? "selected" : ""
-        }`}
+        className={`calendar-day p-2 cursor-pointer flex items-center justify-center h-10 w-10 mx-auto relative ${isSelected ? "selected" : ""
+          }`}
         onClick={() => onDayClick(dateStr)}
       >
         {day}
@@ -94,7 +93,7 @@ export default function CalendarGrid({
           className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
         />
         <label htmlFor="whole-month-checkbox" className="ml-2 block text-sm text-gray-900">
-          Bill for the whole month (1 Liter/day)
+          Monthly Bill (1 Liter/day)
         </label>
       </div>
     </div>

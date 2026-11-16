@@ -1,12 +1,13 @@
 // app/settings/page.tsx
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AppSettings,
   getStoredSettings,
-  saveStoredSettings,
+  fetchRemoteSettings,
+  saveRemoteSettings,
 } from "@/app/utils/settings";
 
 const emptySubscribe = () => () => { };
@@ -21,6 +22,13 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(() => getStoredSettings());
   const [savedNotification, setSavedNotification] = useState(false);
 
+  // Sync latest cloud settings from Supabase on mount
+  useEffect(() => {
+    fetchRemoteSettings().then((remote) => {
+      if (remote) setSettings(remote);
+    });
+  }, []);
+
   const handleChange = <K extends keyof AppSettings>(
     key: K,
     value: AppSettings[K]
@@ -28,9 +36,12 @@ export default function SettingsPage() {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    saveStoredSettings(settings);
+    const ok = await saveRemoteSettings(settings);
+    if (!ok) {
+      alert("⚠️ Warning: Settings saved locally, but failed to save to Supabase cloud. Please check Supabase RLS permissions.");
+    }
     setSavedNotification(true);
     setTimeout(() => setSavedNotification(false), 2500);
   };
@@ -124,12 +135,14 @@ export default function SettingsPage() {
                 <input
                   type="number"
                   id="defaultPrice"
-                  min="1"
+                  min="0"
                   step="0.5"
-                  value={settings.defaultPricePerLiter}
-                  onChange={(e) =>
-                    handleChange("defaultPricePerLiter", parseFloat(e.target.value) || 0)
-                  }
+                  value={settings.defaultPricePerLiter === 0 ? "" : settings.defaultPricePerLiter}
+                  placeholder="0"
+                  onChange={(e) => {
+                    const val = e.target.value === "" ? 0 : parseFloat(e.target.value);
+                    handleChange("defaultPricePerLiter", isNaN(val) ? 0 : val);
+                  }}
                   className="block w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
                   required
                 />
